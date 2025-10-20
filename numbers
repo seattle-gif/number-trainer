@@ -1,0 +1,186 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Number Dictation Trainer (US/UK)</title>
+  <style>
+    :root{--bg:#0f172a;--card:#071029;--accent:#38bdf8;--muted:#9fb4c9}
+    html,body{height:100%;margin:0;font-family:Inter,system-ui,Segoe UI,Roboto,"Helvetica Neue",Arial}
+    body{display:flex;align-items:center;justify-content:center;background:linear-gradient(180deg,#020617,#071029);color:#e6eef8}
+    .card{background:var(--card);padding:26px;border-radius:14px;box-shadow:0 12px 30px rgba(2,6,23,.6);width:540px;max-width:94%}
+    h1{font-size:18px;margin:0 0 10px}
+    p.small{font-size:13px;color:var(--muted);margin:6px 0 16px}
+    .controls{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px}
+    button{background:linear-gradient(180deg,var(--accent),#0ea5e9);border:0;padding:10px 14px;border-radius:10px;color:#04263a;font-weight:600;cursor:pointer}
+    button.ghost{background:transparent;border:1px solid rgba(255,255,255,.06);color:#cfe9fb}
+    select,input[type=number]{padding:8px;border-radius:8px;border:1px solid rgba(255,255,255,.06);background:transparent;color:inherit}
+    .row{display:flex;gap:8px;align-items:center}
+    .result{margin-top:14px;padding:12px;border-radius:10px;background:linear-gradient(180deg,rgba(255,255,255,0.02),rgba(255,255,255,0.01));min-height:42px;display:flex;align-items:center;justify-content:center;font-size:18px}
+    .hint{font-size:12px;color:var(--muted);margin-top:10px}
+    .small{font-size:13px;color:var(--muted)}
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>Number Dictation Trainer</h1>
+    <p class="small">Random numbers from <strong>1 to 10000</strong>. Choose voice (US or UK). Buttons: <em>Play</em>, <em>Pause/Resume</em>, <em>Repeat</em>, <em>Show</em> (reveal number).</p>
+
+    <div class="row" style="margin-bottom:12px">
+      <div style="flex:1" class="controls">
+        <button id="play">Play random</button>
+        <button id="pause" class="ghost">Pause</button>
+        <button id="repeat" class="ghost">Repeat</button>
+        <button id="show" class="ghost">Show</button>
+      </div>
+    </div>
+
+    <div class="row">
+      <label class="small">Voice:</label>
+      <select id="voiceSelect"><option>Loading voices…</option></select>
+      <label class="small">Rate:</label>
+      <input id="rate" type="number" min="0.6" max="1.6" step="0.05" value="0.95" style="width:80px">
+      <label class="small">Pause on end:</label>
+      <select id="pauseMode"><option value="none">No</option><option value="auto">Auto-pause after speak</option></select>
+    </div>
+
+    <div class="result" id="resultArea">(Result hidden — press Show)</div>
+    <div class="hint">Keyboard: P = Play, Space = Pause/Resume, R = Repeat, S = Show</div>
+  </div>
+
+<script>
+(function(){
+  const playBtn = document.getElementById('play')
+  const pauseBtn = document.getElementById('pause')
+  const repeatBtn = document.getElementById('repeat')
+  const showBtn = document.getElementById('show')
+  const voiceSelect = document.getElementById('voiceSelect')
+  const rateInput = document.getElementById('rate')
+  const resultArea = document.getElementById('resultArea')
+  const pauseMode = document.getElementById('pauseMode')
+
+  let lastNumber = null
+  let utter = null
+  let isPaused = false
+  let voices = []
+
+  function randomNumber(){
+    return Math.floor(Math.random()*10000) + 1 // 1..10000
+  }
+
+  function numberToWords(n){
+    // simple conversion using built-in Intl.NumberFormat for grouping isn't words; keep digits shown only.
+    // For clarity we'll return digits as string here. If you want spelled-out words, we can add a small library.
+    return String(n)
+  }
+
+  function populateVoices(){
+    voices = speechSynthesis.getVoices() || []
+    // prefer en-US and en-GB voices
+    const options = []
+    // pick unique by lang+name
+    const seen = new Set()
+    for(const v of voices){
+      const key = (v.lang||'')+ '|' + v.name
+      if(seen.has(key)) continue
+      seen.add(key)
+      // only include en voices
+      if(/^en/i.test(v.lang)) options.push(v)
+    }
+    // sort to prefer en-US then en-GB
+    options.sort((a,b)=>{
+      if(/en-US/i.test(a.lang) && !/en-US/i.test(b.lang)) return -1
+      if(/en-GB/i.test(a.lang) && !/en-GB/i.test(b.lang)) return 1
+      return a.name.localeCompare(b.name)
+    })
+
+    voiceSelect.innerHTML = ''
+    if(options.length===0){
+      const o = document.createElement('option'); o.textContent='(no en voices)'; voiceSelect.appendChild(o); return
+    }
+    for(const v of options){
+      const opt = document.createElement('option')
+      opt.value = v.name + '||' + v.lang
+      opt.textContent = v.name + ' ('+v.lang+')'
+      voiceSelect.appendChild(opt)
+    }
+  }
+
+  function pickVoice(){
+    const val = voiceSelect.value
+    if(!val) return null
+    const [name,lang] = val.split('||')
+    return voices.find(v=>v.name===name && v.lang===lang) || voices.find(v=>v.name===name) || null
+  }
+
+  function speakNumber(n){
+    if(!('speechSynthesis' in window)){
+      alert('Speech Synthesis not supported in this browser.')
+      return
+    }
+    speechSynthesis.cancel()
+    utter = new SpeechSynthesisUtterance(String(n))
+    utter.lang = pickVoice()?.lang || 'en-US'
+    const v = pickVoice()
+    if(v) utter.voice = v
+    utter.rate = Math.max(0.6, Math.min(1.6, Number(rateInput.value)||0.95))
+
+    utter.onstart = ()=>{ isPaused=false; pauseBtn.textContent='Pause' }
+    utter.onend = ()=>{ utter = null; if(pauseMode.value==='auto') { speechSynthesis.pause(); isPaused=true; pauseBtn.textContent='Resume' } }
+    speechSynthesis.speak(utter)
+  }
+
+  playBtn.addEventListener('click', ()=>{
+    lastNumber = randomNumber()
+    // hide result until Show is clicked
+    resultArea.textContent = '(Result hidden — press Show)'
+    speakNumber(lastNumber)
+  })
+
+  pauseBtn.addEventListener('click', ()=>{
+    if(!utter && !speechSynthesis.speaking){
+      // nothing playing
+      return
+    }
+    if(!isPaused){
+      speechSynthesis.pause(); isPaused = true; pauseBtn.textContent='Resume'
+    } else {
+      speechSynthesis.resume(); isPaused = false; pauseBtn.textContent='Pause'
+    }
+  })
+
+  repeatBtn.addEventListener('click', ()=>{
+    if(lastNumber===null) lastNumber = randomNumber()
+    // do not reveal unless Show pressed
+    resultArea.textContent = '(Result hidden — press Show)'
+    speakNumber(lastNumber)
+  })
+
+  showBtn.addEventListener('click', ()=>{
+    if(lastNumber===null){ resultArea.textContent='No number yet — press Play' ; return }
+    resultArea.textContent = numberToWords(lastNumber)
+  })
+
+  // keyboard shortcuts
+  window.addEventListener('keydown', (e)=>{
+    if(e.key.toLowerCase()==='p') { playBtn.click(); e.preventDefault() }
+    if(e.code==='Space'){ pauseBtn.click(); e.preventDefault() }
+    if(e.key.toLowerCase()==='r'){ repeatBtn.click(); e.preventDefault() }
+    if(e.key.toLowerCase()==='s'){ showBtn.click(); e.preventDefault() }
+  })
+
+  // populate voices (may load asynchronously)
+  if('speechSynthesis' in window){
+    populateVoices()
+    window.speechSynthesis.onvoiceschanged = populateVoices
+  } else {
+    voiceSelect.innerHTML = '<option>(Speech API not supported)</option>'
+  }
+
+  // expose for debugging
+  window._numberTrainer = {play: playBtn.click, repeat: repeatBtn.click, show: showBtn.click}
+
+})();
+</script>
+</body>
+</html>
